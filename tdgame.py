@@ -10,34 +10,69 @@ cursor_y = 0
 pyxel.init(WIDTH, HEIGHT, title="PyxelTD")
 pyxel.load("my_resource.pyxres")
 
+# ===================== GAME STATES =====================
+STATE_MENU = 0
+STATE_GAME = 1
+game_state = STATE_MENU
+
 BASE_HP = 10
 base_hp = BASE_HP
-money = 50   # dinheiro inicial
+money = 50
 wave = 1
 max_waves = 10
 wave_active = False
 wave_timer = 0
 
-# map helpers
-def is_path(tile):
-    return tile == (1, 0)
+# ===================== TILE HELPERS =====================
+def is_path(tile): return tile == (1, 0)
+def is_grass(tile): return tile == (3, 0)
+def is_spawn(tile): return tile == (5, 0)
+def is_base(tile): return tile == (7, 0)
+def is_tree(tile): return tile == (1, 2)
 
-def is_grass(tile):
-    return tile == (3, 0)
+# ===================== PATHFINDING =====================
+def find_path():
+    tm = pyxel.tilemaps[0]
+    visited = set()
+    path = []
+    start = None
+    goal = None
 
-def is_spawn(tile):
-    return tile == (5, 0)
+    for y in range(16):
+        for x in range(16):
+            if is_spawn(tm.pget(x, y)):
+                start = (x, y)
+            if is_base(tm.pget(x, y)):
+                goal = (x, y)
 
-def is_base(tile):
-    return tile == (7, 0)
+    if not start or not goal:
+        print("❌ ERROR: spawn or base tile missing")
+        return []
 
-def is_tree(tile):
-    return tile == (1, 2)
+    def dfs(pos):
+        if pos in visited:
+            return False
+        visited.add(pos)
+        path.append(pos)
+        if pos == goal:
+            return True
 
+        x, y = pos
+        for nx, ny in [(x+1,y),(x-1,y),(x,y+1),(x,y-1)]:
+            if 0 <= nx < 16 and 0 <= ny < 16:
+                tile = tm.pget(nx, ny)
+                if is_path(tile) or is_base(tile):
+                    if dfs((nx, ny)):
+                        return True
+        path.pop()
+        return False
 
-# enemies speed
-DEFAULT_SPEED_TILES = 1.0   # tile/sec
-SPAWN_INTERVAL_FRAMES = 60  # frames/spawn
+    dfs(start)
+    return path
+
+# ===================== ENEMY =====================
+DEFAULT_SPEED_TILES = 1.0
+SPAWN_INTERVAL_FRAMES = 60
 
 class Enemy:
     def __init__(self, path, speed_tiles=DEFAULT_SPEED_TILES, hp=5, reward=5):
@@ -87,9 +122,9 @@ class Enemy:
             self.py += (dy / dist) * step
 
     def draw(self):
-        pyxel.rect(int(self.px), int(self.py), TILE_SIZE, TILE_SIZE, 8)
+        pyxel.blt(int(self.px), int(self.py), 0, 5*8, 2*8, TILE_SIZE, TILE_SIZE, 0)
 
-
+# ===================== PROJECTILE =====================
 class Projectile:
     def __init__(self, x, y, target, damage):
         self.x = x
@@ -119,7 +154,7 @@ class Projectile:
     def draw(self):
         pyxel.circ(int(self.x), int(self.y), 1, 7)
 
-
+# ===================== TOWER =====================
 class Tower:
     def __init__(self, tx, ty):
         self.tx = tx
@@ -131,14 +166,20 @@ class Tower:
         self.timer = 0
 
     def upgrade(self):
-        cost = self.level * 20
         global money
+        if self.level >= 3:
+            return
+        cost = self.level * 20
         if money >= cost:
             money -= cost
             self.level += 1
             self.damage += 1
             self.range += 5
             self.reload_time = max(10, self.reload_time - 2)
+
+    def sell_value(self):
+        total_cost = 20 + 20 * (self.level - 1)
+        return total_cost // 2
 
     def update(self, enemies, projectiles):
         self.timer = max(0, self.timer - 1)
@@ -154,114 +195,140 @@ class Tower:
                     break
 
     def draw(self):
-        # cor varia com o level
-        color = 10 if self.level == 1 else 11 if self.level == 2 else 12
-        pyxel.circ(self.tx * TILE_SIZE + 4, self.ty * TILE_SIZE + 4, 3, color)
+        color = 10 if self.level == 1 else 9 if self.level == 2 else 12
+        pyxel.circ(self.tx*TILE_SIZE+4, self.ty*TILE_SIZE+4, 3, color)
 
-        # mostra o range se o cursor estiver em cima
         if cursor_x == self.tx and cursor_y == self.ty:
-            pyxel.circb(self.tx * TILE_SIZE + 4, self.ty * TILE_SIZE + 4, self.range, 5)
+            pyxel.circb(self.tx*TILE_SIZE+4, self.ty*TILE_SIZE+4, self.range, 5)
+            pyxel.text(self.tx*TILE_SIZE, self.ty*TILE_SIZE - 10, f"LV {self.level}/3", 7)
+            if self.level < 3:
+                pyxel.text(self.tx*TILE_SIZE, self.ty*TILE_SIZE - 18, f"UPG:{self.level*20}", 9)
+            else:
+                pyxel.text(self.tx*TILE_SIZE, self.ty*TILE_SIZE - 18, "MAX", 8)
 
-
-# Caminho dos inimigos
-enemy_path = [
-    (0, 1), (1, 1), (2, 1), (3, 1),
-    (3, 2), (3, 3), (2, 3), (1, 3),
-    (1, 2), (1, 1),
-    (2, 1), (3, 1), (4, 1), (5, 1), (6, 1)
-]
-
+# ===================== GAME DATA =====================
+enemy_path = find_path()
 enemies = []
 towers = []
 projectiles = []
-frame_count = 0
-
 
 def start_wave():
     global wave_active, wave_timer, enemies
-    if not wave_active:
-        wave_active = True
-        wave_timer = 0
-        enemies = []
+    wave_active = True
+    wave_timer = 0
+    enemies = []
 
+# ===================== MENU =====================
+def update_menu():
+    global game_state
+    if pyxel.btnp(pyxel.KEY_RETURN):
+        game_state = STATE_GAME
+        start_wave()
 
-def update():
-    global cursor_x, cursor_y, frame_count, enemies, money, wave, wave_active, wave_timer, projectiles
+def draw_menu():
+    pyxel.cls(0)
+    pyxel.bltm(0, 0, 0, 0, 128, 128, 128)
+    pyxel.text(5, 85, "CONTROLS:", 10)
+    pyxel.text(5, 95, "ARROWS - MOVE CURSOR", 7)
+    pyxel.text(5, 103, "SPACE - BUILD TOWER", 7)
+    pyxel.text(5, 111, "U - UPGRADE TOWER", 7)
+    pyxel.text(5, 119, "BACKSPACE - SELL TOWER", 7)
+    if (pyxel.frame_count // 30) % 2 == 0:
+        pyxel.text(38, 55, "PRESS ENTER!", 8)
 
-    if pyxel.btnp(pyxel.KEY_RIGHT):
-        cursor_x = min(15, cursor_x + 1)
-    if pyxel.btnp(pyxel.KEY_LEFT):
-        cursor_x = max(0, cursor_x - 1)
-    if pyxel.btnp(pyxel.KEY_DOWN):
-        cursor_y = min(15, cursor_y + 1)
-    if pyxel.btnp(pyxel.KEY_UP):
-        cursor_y = max(0, cursor_y - 1)
+# ===================== GAME =====================
+def update_game():
+    global cursor_x, cursor_y, enemies, money, wave, wave_active, wave_timer, projectiles, base_hp
 
-    # Construir torre
+    # movement
+    if pyxel.btnp(pyxel.KEY_RIGHT): cursor_x = min(15, cursor_x + 1)
+    if pyxel.btnp(pyxel.KEY_LEFT):  cursor_x = max(0, cursor_x - 1)
+    if pyxel.btnp(pyxel.KEY_DOWN):  cursor_y = min(15, cursor_y + 1)
+    if pyxel.btnp(pyxel.KEY_UP):    cursor_y = max(0, cursor_y - 1)
+
+    # build tower (only if none exists there)
     if pyxel.btnp(pyxel.KEY_SPACE):
         tile = pyxel.tilemaps[0].pget(cursor_x, cursor_y)
-        if is_grass(tile) and money >= 20:
+        occupied = any(t.tx == cursor_x and t.ty == cursor_y for t in towers)
+        if is_grass(tile) and not occupied and money >= 20:
             towers.append(Tower(cursor_x, cursor_y))
             money -= 20
 
-    # Upgrade torre
+    # upgrade tower
     if pyxel.btnp(pyxel.KEY_U):
         for t in towers:
             if t.tx == cursor_x and t.ty == cursor_y:
                 t.upgrade()
 
-    # Pular wave
-    if pyxel.btnp(pyxel.KEY_RETURN):
-        start_wave()
+    # sell tower
+    if pyxel.btnp(pyxel.KEY_BACKSPACE):
+        for t in towers:
+            if t.tx == cursor_x and t.ty == cursor_y:
+                money += t.sell_value()
+                towers.remove(t)
+                break
 
-    # Gerenciar waves
+    # wave logic
     if wave_active:
         wave_timer += 1
+
+        # spawn enemies
         if wave_timer % SPAWN_INTERVAL_FRAMES == 0 and wave_timer // SPAWN_INTERVAL_FRAMES <= wave * 3:
             enemies.append(Enemy(enemy_path, hp=3+wave, reward=5))
+
+        # update enemies
+        for e in enemies:
+            e.update()
+        enemies[:] = [e for e in enemies if e.alive]
+
+        # auto-start next wave when all enemies dead and done spawning
         if len(enemies) == 0 and wave_timer > SPAWN_INTERVAL_FRAMES * wave * 3:
             wave_active = False
             wave += 1
-            money += 10  # recompensa por wave
+            money += 10
+            if wave <= max_waves:
+                start_wave()
+    else:
+        # update towers and projectiles even between waves
+        for t in towers: t.update(enemies, projectiles)
+        for p in projectiles: p.update()
+        projectiles[:] = [p for p in projectiles if p.alive]
+        return
 
-    # Atualizar inimigos
-    for e in enemies:
-        e.update()
-    enemies = [e for e in enemies if e.alive]
+    # update towers and projectiles
+    for t in towers: t.update(enemies, projectiles)
+    for p in projectiles: p.update()
+    projectiles[:] = [p for p in projectiles if p.alive]
 
-    # Atualizar torres
-    for t in towers:
-        t.update(enemies, projectiles)
-
-    # Atualizar projéteis
-    for p in projectiles:
-        p.update()
-    projectiles = [p for p in projectiles if p.alive]
-
-
-def draw():
+def draw_game():
     pyxel.cls(0)
     pyxel.bltm(0, 0, 0, 0, 0, 128, 128)
+    pyxel.rectb(cursor_x*TILE_SIZE, cursor_y*TILE_SIZE, TILE_SIZE, TILE_SIZE, 7)
 
-    pyxel.rectb(cursor_x * TILE_SIZE, cursor_y * TILE_SIZE, TILE_SIZE, TILE_SIZE, 7)
+    pyxel.text(2, 2, f"HP:{base_hp}", 8)
+    pyxel.text(40, 2, f"${money}", 9)
+    pyxel.text(80, 2, f"W:{wave}/{max_waves}", 7)
 
-    pyxel.text(5, 5, f"HP: {base_hp}", 8)
-    pyxel.text(5, 15, f"Money: {money}", 9)
-    pyxel.text(5, 25, f"Wave: {wave}/{max_waves}", 7)
-    pyxel.text(5, 35, "SPACE=build  U=upgrade", 6)
-    pyxel.text(5, 45, "ENTER=skip wave", 6)
-
-    for e in enemies:
-        e.draw()
-    for t in towers:
-        t.draw()
-    for p in projectiles:
-        p.draw()
+    for e in enemies: e.draw()
+    for t in towers: t.draw()
+    for p in projectiles: p.draw()
 
     if wave > max_waves:
         pyxel.text(40, 60, "YOU WIN!", 10)
     elif base_hp <= 0:
         pyxel.text(40, 60, "GAME OVER!", 8)
 
+# ===================== MAIN LOOP =====================
+def update():
+    if game_state == STATE_MENU:
+        update_menu()
+    elif game_state == STATE_GAME:
+        update_game()
+
+def draw():
+    if game_state == STATE_MENU:
+        draw_menu()
+    elif game_state == STATE_GAME:
+        draw_game()
 
 pyxel.run(update, draw)

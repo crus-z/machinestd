@@ -1,13 +1,12 @@
 import pyxel
 
-# =================== CONSTS ===================
+# consts and globals
 WIDTH, HEIGHT, TILE_SIZE = 128, 128, 8
 MAP_TILES_W, MAP_TILES_H = 16, 16
 
 MAP_SRC_TILE_X = [0, 16, 16]
 MAP_SRC_TILE_Y = [0, 0, 16]
 
-# game states
 STATE_MENU = 0
 STATE_MAP_SELECT = 1
 STATE_GAME = 2
@@ -15,16 +14,15 @@ STATE_PAUSE = 3
 STATE_BOSS_CHOICE = 4
 STATE_MAP_EDITOR = 5
 
-# spawn / wave
 SPAWN_INTERVAL_FRAMES = 60
 SPAWN_ROUNDS_PER_WAVE = 3
 
-# tower costs
 COST_NORMAL = 20
 COST_AOE = 35
 COST_DRONE = 50
 
-# ================= GLOBALS ===================
+DEFAULT_SPEED_TILES = 1.0
+
 cursor_x = 0
 cursor_y = 0
 show_info = False
@@ -61,8 +59,8 @@ projectiles = []
 boss_pending = False
 boss_active = False
 
-# build selection
-selected_tower_type = 0  # 0 normal, 1 aoe, 2 drone
+# selection for towers
+selected_tower_type = 0 
 if selected_tower_type == 0:
     tower_cost = COST_NORMAL
 elif selected_tower_type == 1:
@@ -70,8 +68,6 @@ elif selected_tower_type == 1:
 elif selected_tower_type == 2:
     tower_cost = COST_DRONE
 
-
-# tower sprite maps (tile coords in image bank)
 NORMAL_SPRITES = [(5, 6), (4, 7), (5, 7)]
 AOE_SPRITES = [(7, 6), (6, 7), (7, 7)]
 DRONE_TOWER_SPRITES = [(5, 4), (4, 5), (5, 5)]
@@ -81,21 +77,19 @@ DRONE_SPRITES = [(7, 4), (6, 5), (7, 5)]
 custom_map_exists = False
 editor_message_shown = False
 
-# editor cursor & state
-editor_selected_tile = (3, 0)  # default grass tile in tileset coordinates
+# editor cursor and state
+editor_selected_tile = (3, 0)
 
-# ================= HELPERS ===================
 def is_path(tile): return tile == (1, 0)
 def is_grass(tile): return tile == (3, 0)
 def is_spawn(tile): return tile == (5, 0)
 def is_base(tile): return tile == (7, 0)
 
-# tilemap helpers for custom editor region
+# tilemap helpers for custom editor region + coords
 def editor_in_area(x, y):
-    # x,y are tilemap coords
     return 16 <= x < 32 and 16 <= y < 32
 
-# ================= PATHFINDING =================
+# pathfinding system
 def find_paths(map_index=0):
     tm = pyxel.tilemaps[0]
     x_offset = MAP_SRC_TILE_X[map_index]
@@ -103,7 +97,7 @@ def find_paths(map_index=0):
     spawns = []
     goals = []
 
-    # scan tilemap region for this map
+    # scanner
     for y in range(y_offset, y_offset + MAP_TILES_H):
         for x in range(x_offset, x_offset + MAP_TILES_W):
             t = tm.pget(x, y)
@@ -112,11 +106,9 @@ def find_paths(map_index=0):
             if is_base(t):
                 goals.append((x, y))
 
-    # if no valid start/goal, return nothing
     if not spawns or not goals:
         return [], [], x_offset, y_offset
 
-    # depth-first search for pathfinding
     def dfs(start, goal):
         visited = set()
         path = []
@@ -143,21 +135,18 @@ def find_paths(map_index=0):
             return path
         return []
 
-    # build all spawn -> base paths
+    # build paths
     paths = []
     for s in spawns:
         abs_path = dfs(s, goals[0])
         if abs_path:
-            # convert to local (0–15) coordinates
+            # get current tilemap
             local = [(x - x_offset, y - y_offset) for x, y in abs_path]
             paths.append(local)
 
-    # return everything needed
     return paths, spawns, x_offset, y_offset
 
-# ================= ENEMIES =====================
-DEFAULT_SPEED_TILES = 1.0
-
+# enemies
 class Enemy:
     def __init__(self, path, speed_tiles=DEFAULT_SPEED_TILES, hp=5, reward=5, sprite=(5,2)):
         self.path = path
@@ -213,7 +202,7 @@ class BossEnemy(Enemy):
     def __init__(self, path):
         super().__init__(path, speed_tiles=0.6, hp=200, reward=100, sprite=(3,4))
 
-# ================= PROJECTILES ==================
+# projectiles
 class Projectile:
     def __init__(self, x, y, target, damage, speed=2.5, aoe_radius=0):
         self.x = x
@@ -234,7 +223,7 @@ class Projectile:
         dy = ty - self.y
         dist = (dx*dx + dy*dy) ** 0.5
         if dist < 3:
-            # impact
+            # impact logic
             if self.aoe_radius > 0:
                 for e in enemies:
                     ex = e.px + TILE_SIZE/2
@@ -252,7 +241,7 @@ class Projectile:
     def draw(self):
         pyxel.circ(int(self.x), int(self.y), 1, 7)
 
-# ================= DRONE ========================
+# drone
 class Drone:
     def __init__(self, tower):
         # start centered on tower
@@ -267,7 +256,7 @@ class Drone:
     def update(self):
         # pick nearest target
         best = None
-        bestd = 1e9
+        bestd = 1e9 # start with a big number, so any distance between the drone and the enemy will be lower (hard to understand)
         for e in enemies:
             if not e.alive: continue
             dx = (e.px + TILE_SIZE/2) - self.x
@@ -277,7 +266,7 @@ class Drone:
                 bestd = d; best = e
         self.target = best
         if not self.target:
-            # slowly return to tower center
+            # return to tower
             tx = self.tower.tx * TILE_SIZE + TILE_SIZE//2
             ty = self.tower.ty * TILE_SIZE + TILE_SIZE//2
             dx = tx - self.x; dy = ty - self.y
@@ -308,14 +297,13 @@ class Drone:
             self.timer = self.reload
 
     def draw(self):
-        # draw sprite based on tower level
         lvl = max(1, min(3, self.tower.level))
         sx, sy = DRONE_SPRITES[lvl-1]
         px = int(self.x) - 4
         py = int(self.y) - 4
         pyxel.blt(px, py, 0, sx*8, sy*8, 8, 8, 0)
 
-# ================= TOWERS =======================
+# towers
 class BaseTower:
     def __init__(self, tx, ty, map_index):
         self.tx = tx; self.ty = ty; self.map_index = map_index
@@ -390,7 +378,6 @@ class AOETower(BaseTower):
         self.damage = 2
         self.reload = 45
         self.timer = 0
-        # projectile count: level1 = 3, level2 = 4, level3 = 5
         self.projectile_count = 3
 
     def on_upgrade(self):
@@ -408,12 +395,13 @@ class AOETower(BaseTower):
                 dy = (e.py + TILE_SIZE / 2) - self.center_py()
                 if dx * dx + dy * dy <= self.range * self.range:
                     n = self.projectile_count
-                    # produce simple spread offsets (no trig): use fixed offset patterns
+                    # spread projectiles cuz the tower is AOE
                     offsets = [(-8, -4), (-4, -2), (0, 0), (4, 2), (8, 4)]
                     # center around the enemy position
                     for i in range(n):
                         ox, oy = offsets[i]
-                        dummy = type("T", (), {})()
+                        dummy = type("T", (), {})() # creating generic object, this makes the projectile spread and not go all for the same enemy
+                        # !!!!!! GLITCHING MONEY !!!!!!
                         dummy.px = e.px + ox
                         dummy.py = e.py + oy
                         dummy.alive = True
@@ -456,7 +444,7 @@ class DroneTower(BaseTower):
     def get_ui_range(self):
         return 25
 
-# ================= GAME CONTROL ===================
+# game control
 def start_wave():
     global wave_active, wave_timer, enemies, spawn_rounds_done, boss_pending, boss_active
     wave_active = True
@@ -488,7 +476,7 @@ def safe_return_to_menu():
     towers.clear()
     projectiles.clear()
 
-    # reset core state
+    # reset state
     base_hp = BASE_HP
     money = 50
     wave = 1
@@ -502,11 +490,11 @@ def safe_return_to_menu():
     cursor_x = 0
     cursor_y = 0
 
-    # back to main menu
+    # back to menu
     game_state = STATE_MENU
 
 
-# ================= UI / Menus ===================
+# menu
 def update_menu():
     global game_state
     if pyxel.btnp(pyxel.KEY_RETURN):
@@ -526,7 +514,6 @@ def draw_menu():
     pyxel.text(10, 90, "U: Upgrade | Backspace: Sell", 7)
     pyxel.text(10, 100, "P: Pause", 7)
     pyxel.text(10, 110, "I: Tower Info", 7)
-
 
 def update_map_select():
     global map_selection, game_state, enemy_paths, custom_map_exists, editor_message_shown
@@ -558,8 +545,7 @@ def update_map_select():
         custom_map_exists = False
     if pyxel.btnp(pyxel.KEY_BACKSPACE):
         game_state = STATE_MENU
-
-
+        
 def draw_map_select():
     pyxel.cls(0)
     pyxel.text(40, 30, "SELECT MAP", 10)
@@ -583,8 +569,7 @@ def draw_map_select():
 
     pyxel.text(10, 120, "Backspace: Return to menu", 5)
     
-# ================= PAUSE MENU ===================
-
+# pause
 def update_pause():
     global game_state, pause_selection
 
@@ -605,7 +590,6 @@ def draw_pause():
     pyxel.text(36, 70, "Resume", 7 if pause_selection == 0 else 5)
     pyxel.text(36, 80, "Return to Lobby", 7 if pause_selection == 1 else 5)
 
-
 def update_boss_choice():
     global game_state, infinite_mode, pause_selection, wave
     if pyxel.btnp(pyxel.KEY_UP) or pyxel.btnp(pyxel.KEY_DOWN):
@@ -615,7 +599,6 @@ def update_boss_choice():
             reset_game()
         else:
             infinite_mode = True
-            # proceed next wave as usual
             if wave >= max_waves:
                 wave += 1
             start_wave()
@@ -628,7 +611,7 @@ def draw_boss_choice():
     pyxel.text(10, 62, "Play 10 more waves", 7 if pause_selection == 1 else 5)
     pyxel.text(10, 100, "Press ENTER to choose", 5)
 
-# ================= MAP EDITOR ===================
+# map editor
 editor_save_message = ""
 editor_save_timer = 0
 
@@ -636,13 +619,13 @@ def update_map_select():
     global map_selection, game_state, enemy_paths, custom_map_exists
     global editor_message, editor_msg_timer
 
-    # move up/down between maps
+    # select maps
     if pyxel.btnp(pyxel.KEY_UP):
         map_selection = (map_selection - 1) % 3
     if pyxel.btnp(pyxel.KEY_DOWN):
         map_selection = (map_selection + 1) % 3
 
-    # ENTER = play map
+    # play map
     if pyxel.btnp(pyxel.KEY_RETURN):
         if map_selection < 2:
             game_state = STATE_GAME
@@ -663,13 +646,13 @@ def update_map_select():
                     editor_message = ["Connect portals", "to bases in order to play"]
                     editor_msg_timer = 180
 
-    # E = Edit custom map (always opens editor)
+    # edit custom map
     if pyxel.btnp(pyxel.KEY_E):
         game_state = STATE_MAP_EDITOR
         editor_message = ["Connect portals", "to bases in order to play"]
         editor_msg_timer = 180
 
-    # D = Delete custom map
+    # delete custom map
     if pyxel.btnp(pyxel.KEY_D) and custom_map_exists:
         tm = pyxel.tilemaps[0]
         for yy in range(16, 32):
@@ -677,7 +660,7 @@ def update_map_select():
                 tm.pset(xx, yy, (3, 0))
         custom_map_exists = False
 
-    # BACKSPACE = Return to menu
+    # return to menu
     if pyxel.btnp(pyxel.KEY_BACKSPACE):
         game_state = STATE_MENU
 
@@ -710,7 +693,7 @@ def update_map_editor():
     global cursor_x, cursor_y, editor_selected_tile, custom_map_exists, game_state
     global editor_save_message, editor_save_timer
 
-    # Move cursor
+    # move cursor
     if pyxel.btnp(pyxel.KEY_LEFT):
         move_editor_cursor(-1, 0)
     if pyxel.btnp(pyxel.KEY_RIGHT):
@@ -720,8 +703,7 @@ def update_map_editor():
     if pyxel.btnp(pyxel.KEY_DOWN):
         move_editor_cursor(0, 1)
 
-    # choose tiles with number keys
-    # 1 = Grass, 2 = Tree, 3 = Path, 4 = Base, 5 = Portal
+    # choose tiles
     if pyxel.btnp(pyxel.KEY_1):
         editor_selected_tile = (3, 0)
     if pyxel.btnp(pyxel.KEY_2):
@@ -733,7 +715,7 @@ def update_map_editor():
     if pyxel.btnp(pyxel.KEY_5):
         editor_selected_tile = (5, 0)
 
-    # place tile with SPACE
+    # map editor placing logic
     if pyxel.btnp(pyxel.KEY_SPACE):
         tm = pyxel.tilemaps[0]
         tx = cursor_x + 16
@@ -741,13 +723,13 @@ def update_map_editor():
         tm.pset(tx, ty, editor_selected_tile)
         custom_map_exists = True
 
-    # save confirmation text (visual feedback) 
+    # save confirmation text 
     if editor_save_timer > 0:
         editor_save_timer -= 1
         if editor_save_timer == 0:
             editor_save_message = ""
 
-    # press P to return to map select
+    # return to map select
     if pyxel.btnp(pyxel.KEY_P):
         game_state = STATE_MAP_SELECT
 
@@ -757,15 +739,14 @@ def move_editor_cursor(dx, dy):
     cursor_x = max(0, min(MAP_TILES_W - 1, cursor_x + dx))
     cursor_y = max(0, min(MAP_TILES_H - 1, cursor_y + dy))
 
-# ================= GAME UPDATE ===================
 def update_game():
     global cursor_x, cursor_y, enemies, money, wave, wave_active, wave_timer, projectiles, base_hp
     global spawn_rounds_done, boss_pending, boss_active, selected_tower_type, game_state, pause_selection, infinite_mode
 
-    # ===== Win / Lose handling =====
+    # win/lose
     if (wave > max_waves and not infinite_mode) or base_hp <= 0:
         if pyxel.btnp(pyxel.KEY_RETURN):
-            reset_game()  # return to menu after win/lose
+            reset_game()
         return
 
     if base_hp <= 0:
@@ -778,18 +759,18 @@ def update_game():
         pause_selection = 0
         return
 
-    # movement
+    # cursor movement
     if pyxel.btnp(pyxel.KEY_RIGHT): cursor_x = min(MAP_TILES_W - 1, cursor_x + 1)
     if pyxel.btnp(pyxel.KEY_LEFT): cursor_x = max(0, cursor_x - 1)
     if pyxel.btnp(pyxel.KEY_DOWN): cursor_y = min(MAP_TILES_H - 1, cursor_y + 1)
     if pyxel.btnp(pyxel.KEY_UP): cursor_y = max(0, cursor_y - 1)
 
-    # tower selection 1/2/3
+    # tower selection
     if pyxel.btnp(pyxel.KEY_1): selected_tower_type = 0
     if pyxel.btnp(pyxel.KEY_2): selected_tower_type = 1
     if pyxel.btnp(pyxel.KEY_3): selected_tower_type = 2
 
-    # build with SPACE
+    # build logic
     if pyxel.btnp(pyxel.KEY_SPACE):
         abs_x = cursor_x + MAP_SRC_TILE_X[map_selection]
         abs_y = cursor_y + MAP_SRC_TILE_Y[map_selection]
@@ -797,7 +778,7 @@ def update_game():
         occupied = any((t.tx == cursor_x and t.ty == cursor_y and t.map_index == map_selection) for t in towers)
         if is_grass(tile) and not occupied:
             # increased cost based on the number of towers placed
-            build_price = [COST_NORMAL, COST_AOE, COST_DRONE][selected_tower_type] + len(towers) * 10  # increase cost for each placed tower
+            build_price = [COST_NORMAL, COST_AOE, COST_DRONE][selected_tower_type] + len(towers) * 10
             if money >= build_price:
                 money -= build_price
                 if selected_tower_type == 0:
@@ -830,11 +811,11 @@ def update_game():
         wave_timer += 1
 
         if spawn_rounds_done < SPAWN_ROUNDS_PER_WAVE and wave_timer % SPAWN_INTERVAL_FRAMES == 0:
-            # === Enemy Spawn Logic ===
+            # enemy spawn logic
             base_spawn = 2
             spawn_count_per_portal = base_spawn + (wave - 1)  # +1 per wave
 
-            # number of fast enemies starts at 2 in wave 2, +1 per wave
+            # fast enemies logic
             fast_enemy_count = 0
             if wave >= 2:
                 fast_enemy_count = 2 + (wave - 2)
@@ -851,23 +832,22 @@ def update_game():
                         continue
                     if k < fast_enemy_count:
                         e = FastEnemy(path)
-                        e.hp = 6 + wave * 2  # stronger fast enemies
+                        e.hp = 6 + wave * 2
                         e.reward = 6 + wave
                         enemies.append(e)
                     else:
                         e = Enemy(path, hp=4 + wave * 2, reward=5 + wave)
                         enemies.append(e)
 
-                    # spawn directly at portal center
+                    # spawn at portal center
                     enemies[-1].px = (sx - map_x_offset) * TILE_SIZE
                     enemies[-1].py = (sy - map_y_offset) * TILE_SIZE
 
             spawn_rounds_done += 1
 
-        # update enemies
         for e in enemies:
             e.update()
-        enemies[:] = [e for e in enemies if e.alive]
+        enemies = [e for e in enemies if e.alive]
 
         # boss spawn
         if boss_pending and spawn_rounds_done >= SPAWN_ROUNDS_PER_WAVE and len(enemies) == 0 and not boss_active:
@@ -883,7 +863,7 @@ def update_game():
                     boss.reward = 150 + (wave * 15)
                     enemies.append(boss)
 
-        # boss defeated -> show +10 waves/lobby choice
+        # defeat screen
         if boss_active and not any(isinstance(e, BossEnemy) and e.alive for e in enemies):
             boss_active = False
             pause_selection = 0
@@ -902,18 +882,15 @@ def update_game():
                 money += 10
                 start_wave()
 
-    # tower updates
     for t in towers:
         if t.map_index == map_selection:
             t.update(enemies, projectiles)
 
-    # projectile updates
     for p in projectiles:
         p.update()
-    projectiles[:] = [p for p in projectiles if p.alive]
+    projectiles = [p for p in projectiles if p.alive]
 
 
-# ================= DRAW ==========================
 def draw_game():
     pyxel.cls(0)
     if map_selection == 0:
@@ -926,7 +903,7 @@ def draw_game():
     # cursor
     pyxel.rectb(cursor_x * TILE_SIZE, cursor_y * TILE_SIZE, TILE_SIZE, TILE_SIZE, 7)
 
-    # draw enemies, towers, projectiles
+    # enemies, towers, projectiles
     for e in enemies: e.draw()
     for t in towers:
         if t.map_index == map_selection: t.draw()
@@ -939,7 +916,7 @@ def draw_game():
         return 
 
 
-    # ===================== HUD ======================
+    # HUD
     pyxel.text(2, 2, f"HP:{base_hp}", 8)
     pyxel.text(40, 2, f"${money}", 9)
 
@@ -955,7 +932,7 @@ def draw_game():
 
     # show selected tower type and its price
     names = ["Normal", "AOE", "Drone"]
-    build_price = [COST_NORMAL, COST_AOE, COST_DRONE][selected_tower_type] + len(towers) * 10  # Increased price per tower placed
+    build_price = [COST_NORMAL, COST_AOE, COST_DRONE][selected_tower_type] + len(towers) * 10
     pyxel.text(2, 12, f"Sel: {names[selected_tower_type]} ${build_price} (1/2/3)", 7)
 
     if show_info:
@@ -965,9 +942,8 @@ def draw_game():
                 pyxel.text(5, 95, f"Type: {t.__class__.__name__}", 7)
                 pyxel.text(5, 105, f"Level: {t.level}/3", 7)
 
-                # show upgrade price only if not at level 3
                 if t.level < 3:
-                    upgrade_cost = (t.level * 20) + (len(towers) * 10)  # Base cost + extra for each tower
+                    upgrade_cost = (t.level * 20) + (len(towers) * 10)
                     pyxel.text(5, 115, f"Upgrade Price: ${upgrade_cost}", 7)
                 else:
                     pyxel.text(5, 115, f"Upgrade Price: N/A", 7)
@@ -986,7 +962,7 @@ def draw():
     elif game_state == STATE_MAP_EDITOR:
         draw_map_editor()
 
-# ============== main loop helpers for menus (small) ==========
+# loop
 def update():
     if game_state == STATE_MENU:
         update_menu()
@@ -1001,13 +977,11 @@ def update():
     elif game_state == STATE_MAP_EDITOR:
         update_map_editor()
 
-# initialize
 def init_game_start():
     global enemy_paths
     enemy_paths = find_paths(map_selection)
     start_wave()
 
-# run initial setup
 enemy_paths = find_paths(map_selection)
 start_wave()
 pyxel.run(update, draw)
